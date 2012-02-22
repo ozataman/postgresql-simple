@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings #-}
+{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable #-}
 
 ------------------------------------------------------------------------------
 -- |
@@ -21,10 +21,18 @@ module Database.PostgreSQL.Simple.QueryResults
     (
       QueryResults(..)
     , convertError
+    -- * Helpers For Parsing Custom Data Types
+    , ResultParser
+    , field
+    , pass
+    , runResultParser
+    , FieldParseError(..)
     ) where
 
+import Data.Typeable
+import Control.Monad.State
 import Control.Applicative (Applicative(..), (<$>))
-import Control.Exception (SomeException(..), throw)
+import Control.Exception (SomeException(..), Exception(..), throw)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
 import Data.Either()
@@ -243,3 +251,65 @@ ellipsis bs
     | B.length bs > 15 = B.take 10 bs `B.append` "[...]"
     | otherwise        = bs
 
+
+                              ------------------
+                              -- Parsing Help --
+                              ------------------
+
+
+-------------------------------------------------------------------------------
+-- | Exceptions that may be raised while trying to parse a row
+data FieldParseError = NotEnoughFields
+  deriving (Eq, Show, Typeable)
+
+instance Exception FieldParseError
+
+
+-------------------------------------------------------------------------------
+-- | A stateful row parsing environment.
+--
+-- While parsing each row, we go field-by-field and consume the parsed
+-- fields along the way. This allows us to use the convenient and
+-- minimal applicative/monad forms while parsing rows into custom data
+-- types:
+--
+-- @
+-- data User = User name lastname age
+--
+-- instance "QueryResults" User where
+--     "convertResults" = "runResultParser" p
+--       where
+--         p = do
+--           "pass"      -- discard the first column
+--           name      <- "field"
+--           lastname  <- "field"
+--           "pass"      -- skip another column
+--           age       <- "field"
+--           return $ User name lastname age
+-- @
+type ResultParser a = StateT [(Field, Maybe ByteString)] (Either SomeException) a
+
+
+-------------------------------------------------------------------------------
+-- | Parse the next field in line, consuming it in process
+field :: (Result a) => ResultParser a
+field = do
+  st <- get
+  case st of
+    ((f,v) : rest) -> do
+      res <- lift $ convert f v
+      put rest
+      return res
+    [] -> lift $ Left . SomeException $ NotEnoughFields
+
+
+-------------------------------------------------------------------------------
+-- | Discard the next field in line
+pass :: ResultParser ()
+pass = modify $ drop 1
+
+
+-------------------------------------------------------------------------------
+-- | Run a ResultParser
+runResultParser :: ResultParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
+runResultParser p fs vs = evalStateT p (zip fs vs)
