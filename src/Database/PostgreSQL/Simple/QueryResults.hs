@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable #-}
+{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
 
 ------------------------------------------------------------------------------
 -- |
@@ -22,11 +22,11 @@ module Database.PostgreSQL.Simple.QueryResults
       QueryResults(..)
     , convertError
     -- * Helpers For Parsing Custom Data Types
-    , ResultParser
+    , RowParser
     , field
     , pass
-    , runResultParser
-    , FieldParseError(..)
+    , runRowParser
+    , RowParseError(..)
     ) where
 
 import Data.Typeable
@@ -93,14 +93,26 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 -- 'Result' values we need to force.  This gives the consumer of the
 -- 'QueryResult' the ability to cause the memory leak,  which is an
 -- undesirable state of affairs.
-
+--
+-- Minimum complete definition: 'convertResults' or 'rowParser'
 class QueryResults a where
+
+    ---------------------------------------------------------------------------
+    -- | 'rowParser' offers a convenient way to parse rows into custom
+    -- data types using an applicative and/or monadic parsing style.
+    -- See 'RowParser' for documentation.
+    rowParser :: RowParser a
+    rowParser = rowParserError ParserNotDefined
+
     convertResults :: [Field] -> [Maybe ByteString] -> Either SomeException a
+    convertResults = runRowParser rowParser
     -- ^ Convert values from a row into a Haskell collection.
     --
     -- This function will return a 'ResultError' if conversion of the
     -- collection fails.
+    
 
+-------------------------------------------------------------------------------
 instance (Result a) => QueryResults (Only a) where
     convertResults [fa] [va] = do
               !a <- convert fa va
@@ -257,12 +269,7 @@ ellipsis bs
                               ------------------
 
 
--------------------------------------------------------------------------------
--- | Exceptions that may be raised while trying to parse a row
-data FieldParseError = NotEnoughFields
-  deriving (Eq, Show, Typeable)
-
-instance Exception FieldParseError
+type RowParserState = [(Field, Maybe ByteString)]
 
 
 -------------------------------------------------------------------------------
@@ -287,29 +294,49 @@ instance Exception FieldParseError
 --           age       <- "field"
 --           return $ User name lastname age
 -- @
-type ResultParser a = StateT [(Field, Maybe ByteString)] (Either SomeException) a
+newtype RowParser a 
+  = RowParser { unRowParser :: (StateT RowParserState (Either SomeException) a) }
+  deriving (Functor, 
+            Monad, 
+            MonadState RowParserState)
+
+
+-------------------------------------------------------------------------------
+-- | Exceptions that may be raised while trying to parse a row
+data RowParseError 
+    = NotEnoughFields
+    | ParserNotDefined
+  deriving (Eq, Show, Typeable)
+
+instance Exception RowParseError
+
+
+-------------------------------------------------------------------------------
+-- | 
+rowParserError :: (Exception e) => e -> RowParser a
+rowParserError = RowParser . lift . Left . SomeException
 
 
 -------------------------------------------------------------------------------
 -- | Parse the next field in line, consuming it in process
-field :: (Result a) => ResultParser a
+field :: (Result a) => RowParser a
 field = do
   st <- get
   case st of
     ((f,v) : rest) -> do
-      res <- lift $ convert f v
+      res <- RowParser . lift $ convert f v
       put rest
       return res
-    [] -> lift $ Left . SomeException $ NotEnoughFields
+    [] -> rowParserError $ NotEnoughFields
 
 
 -------------------------------------------------------------------------------
 -- | Discard the next field in line
-pass :: ResultParser ()
+pass :: RowParser ()
 pass = modify $ drop 1
 
 
 -------------------------------------------------------------------------------
 -- | Run a ResultParser
-runResultParser :: ResultParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
-runResultParser p fs vs = evalStateT p (zip fs vs)
+runRowParser :: RowParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
+runRowParser p fs vs = evalStateT (unRowParser p) (zip fs vs)
