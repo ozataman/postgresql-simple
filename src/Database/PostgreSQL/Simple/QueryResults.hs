@@ -296,9 +296,7 @@ type RowParserState = [(Field, Maybe ByteString)]
 -- @
 newtype RowParser a 
   = RowParser { unRowParser :: (StateT RowParserState (Either SomeException) a) }
-  deriving (Functor, 
-            Monad, 
-            MonadState RowParserState)
+  deriving (Functor, Applicative, Monad, MonadState RowParserState)
 
 
 -------------------------------------------------------------------------------
