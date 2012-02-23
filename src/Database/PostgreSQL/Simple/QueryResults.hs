@@ -30,7 +30,7 @@ module Database.PostgreSQL.Simple.QueryResults
     ) where
 
 import Data.Typeable
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Control.Applicative (Applicative(..), (<$>))
 import Control.Exception (SomeException(..), Exception(..), throw)
 import Data.ByteString (ByteString)
@@ -284,9 +284,7 @@ type RowParserState = [(Field, Maybe ByteString)]
 -- data User = User name lastname age
 --
 -- instance "QueryResults" User where
---     "convertResults" = "runResultParser" p
---       where
---         p = do
+--     "rowParser" = do
 --           "pass"      -- discard the first column
 --           name      <- "field"
 --           lastname  <- "field"
@@ -335,6 +333,6 @@ pass = modify $ drop 1
 
 
 -------------------------------------------------------------------------------
--- | Run a ResultParser
+-- | Run a RowParser
 runRowParser :: RowParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
 runRowParser p fs vs = evalStateT (unRowParser p) (zip fs vs)
