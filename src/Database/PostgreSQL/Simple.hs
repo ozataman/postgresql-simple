@@ -104,30 +104,35 @@ module Database.PostgreSQL.Simple
     , formatQuery
     ) where
 
-import Blaze.ByteString.Builder (Builder, fromByteString, toByteString)
-import Blaze.ByteString.Builder.Char8 (fromChar)
-import Control.Applicative ((<$>), pure)
-import Control.Concurrent.MVar
-import Control.Exception (Exception, bracket, onException, throw, throwIO, finally)
-import Control.Monad (foldM)
-import Control.Monad.Fix (fix)
-import Data.ByteString (ByteString)
-import Data.Char(ord)
-import Data.Int (Int64)
-import qualified Data.IntMap as IntMap
-import Data.List (intersperse)
-import Data.Monoid (mappend, mconcat)
-import Data.Typeable (Typeable)
-import Database.PostgreSQL.Simple.BuiltinTypes (oid2builtin, builtin2typname)
-import Database.PostgreSQL.Simple.Param (Action(..), inQuotes)
-import Database.PostgreSQL.Simple.QueryParams (QueryParams(..))
-import Database.PostgreSQL.Simple.Result (ResultError(..))
-import Database.PostgreSQL.Simple.FromRow (FromRow(..))
-import Database.PostgreSQL.Simple.Types (Binary(..), In(..), Only(..), Query(..))
-import Database.PostgreSQL.Simple.Internal as Base
-import qualified Database.PostgreSQL.LibPQ as PQ
-import Text.Regex.PCRE.Light (compile, caseless, match)
-import qualified Data.ByteString.Char8 as B
+import           Blaze.ByteString.Builder                (Builder, fromByteString, toByteString)
+import           Blaze.ByteString.Builder.Char8          (fromChar)
+import           Control.Applicative                     ((<$>), pure)
+import           Control.Concurrent.MVar
+import           Control.Exception                       (Exception, bracket, onException, 
+                                                          throw, throwIO, finally)
+import           Control.Monad                           (foldM)
+import           Control.Monad.Fix                       (fix)
+import           Data.ByteString                         (ByteString)
+import qualified Data.ByteString.Char8                   as B
+import           Data.Char                               (ord)
+import           Data.Int                                (Int64)
+import qualified Data.IntMap                             as IntMap
+import           Data.List                               (intersperse)
+import           Data.Monoid                             (mappend, mconcat)
+import           Data.Typeable                           (Typeable)
+import qualified Database.PostgreSQL.LibPQ               as PQ
+import           Text.Regex.PCRE.Light                   (compile, caseless, match)
+-------------------------------------------------------------------------------
+import           Database.PostgreSQL.Simple.BuiltinTypes (oid2builtin, builtin2typname)
+import           Database.PostgreSQL.Simple.FromRow      (FromRow(..))
+import           Database.PostgreSQL.Simple.Internal     as Base
+import           Database.PostgreSQL.Simple.Ok
+import           Database.PostgreSQL.Simple.Param        (Action(..), inQuotes)
+import           Database.PostgreSQL.Simple.QueryParams  (QueryParams(..))
+import           Database.PostgreSQL.Simple.Result       (ResultError(..))
+import           Database.PostgreSQL.Simple.Types        (Binary(..), In(..), Only(..), Query(..))
+-------------------------------------------------------------------------------
+
 
 -- | Exception thrown if a 'Query' could not be formatted correctly.
 -- This may occur if the number of \'@?@\' characters in the query
@@ -469,8 +474,8 @@ finishQuery conn q result = do
         forM' 0 (nrows-1) $ \row -> do
            values <- forM' 0 (ncols-1) (\col -> PQ.getvalue result row col)
            case convertResults fields values of
-             Left  err -> throwIO err
-             Right a   -> return a
+             Errors (err:_) -> throwIO err
+             Ok a   -> return a
     PQ.CopyIn  -> fail "FIXME: postgresql-simple does not currently support COPY IN"
     PQ.CopyOut -> fail "FIXME: postgresql-simple does not currently support COPY OUT"
     _ -> do

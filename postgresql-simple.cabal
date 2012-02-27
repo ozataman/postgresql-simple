@@ -26,7 +26,7 @@ Library
      Database.PostgreSQL.Simple.Ok
      Database.PostgreSQL.Simple.Param
      Database.PostgreSQL.Simple.QueryParams
-     Database.PostgreSQL.Simple.QueryResults
+     Database.PostgreSQL.Simple.FromRow
      Database.PostgreSQL.Simple.Result
      Database.PostgreSQL.Simple.SqlQQ
      Database.PostgreSQL.Simple.Types

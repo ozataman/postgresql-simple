@@ -1,11 +1,12 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable,  ScopedTypeVariables,
-             GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable, FlexibleInstances,
+             ScopedTypeVariables, TypeOperators, GeneralizedNewtypeDeriving #-}
 
 ------------------------------------------------------------------------------
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromRow
 -- Copyright:   (c) 2011 MailRank, Inc.
 --              (c) 2011 Leon P Smith
+--              (c) 2012 Ozgun Ataman
 -- License:     BSD3
 -- Maintainer:  Leon P Smith <leon@melding-monads.com>
 -- Stability:   experimental
@@ -19,8 +20,7 @@
 ------------------------------------------------------------------------------
 
 module Database.PostgreSQL.Simple.FromRow
-    (
-      FromRow(..)
+    ( FromRow(..)
     , convertError
     -- * Helpers For Parsing Custom Data Types
     , RowParser
@@ -28,36 +28,42 @@ module Database.PostgreSQL.Simple.FromRow
     , peekField
     , skip
     , rewind
+    , (:.) (..)
+    , Z (..)
     , runRowParser
     , RowParseError(..)
     ) where
 
-import Data.Typeable
-import Control.Monad.State.Strict
-import Control.Applicative (Applicative(..), (<$>))
-import Control.Exception (SomeException(..), Exception(..), throw)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as B
-import Data.Either()
-import Database.PostgreSQL.Simple.Internal
-import Database.PostgreSQL.Simple.Result (ResultError(..), Result(..))
-import Database.PostgreSQL.Simple.Types (Only(..))
-import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
+-------------------------------------------------------------------------------
+import           Control.Applicative                  (Applicative(..), (<$>))
+import           Control.Exception                    (SomeException(..), Exception(..), throw)
+import           Control.Monad.State.Strict
+import           Data.ByteString                      (ByteString)
+import qualified Data.ByteString.Char8                as B
+import           Data.Typeable
+import qualified Database.PostgreSQL.LibPQ            as LibPQ (Result)
+-------------------------------------------------------------------------------
+import           Database.PostgreSQL.Simple.FromField (ResultError(..), FromField(..))
+import           Database.PostgreSQL.Simple.Internal
+import           Database.PostgreSQL.Simple.Ok
+import           Database.PostgreSQL.Simple.Types     (Only(..))
+-------------------------------------------------------------------------------
+
 
 -- | A collection type that can be converted from a list of strings.
 --
--- Instances should use the 'convert' method of the 'Result' class
+-- Instances should use the 'fromField' method of the 'FromField' class
 -- to perform conversion of each element of the collection.
 --
 -- This example instance demonstrates how to convert a two-column row
 -- into a Haskell pair. Each field in the metadata is paired up with
--- each value from the row, and the two are passed to 'convert'.
+-- each value from the row, and the two are passed to 'fromField'.
 --
 -- @
--- instance ('Result' a, 'Result' b) => 'FromRow' (a,b) where
+-- instance ('FromField' a, 'FromField' b) => 'FromRow' (a,b) where
 --     'convertResults' [fa,fb] [va,vb] = do
---               !a <- 'convert' fa va
---               !b <- 'convert' fb vb
+--               !a <- 'fromField' fa va
+--               !b <- 'fromField' fb vb
 --               'return' (a,b)
 --     'convertResults' fs vs  = 'convertError' fs vs 2
 -- @
@@ -86,8 +92,8 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 --
 -- instance 'FromRow' User where
 --     'convertResults' [fa,qfb] [va,vb] = User \<$\> a \<*\> b
---        where  !a =  'convert' fa va
---               !b =  'convert' fb vb
+--        where  !a =  'fromField' fa va
+--               !b =  'fromField' fb vb
 --     'convertResults' fs vs  = 'convertError' fs vs 2
 -- @
 --
@@ -107,7 +113,7 @@ class FromRow a where
     rowParser :: RowParser a
     rowParser = rowParserError ParserNotDefined
 
-    convertResults :: [Field] -> [Maybe ByteString] -> Either SomeException a
+    convertResults :: [Field] -> [Maybe ByteString] -> Ok a
     convertResults = runRowParser rowParser
     -- ^ Convert values from a row into a Haskell collection.
     --
@@ -116,133 +122,138 @@ class FromRow a where
     
 
 -------------------------------------------------------------------------------
-instance (Result a) => FromRow (Only a) where
+instance (FromField a) => FromRow (Only a) where
     convertResults [fa] [va] = do
-              !a <- convert fa va
+              !a <- fromField fa va
               return (Only a)
     convertResults fs vs  = convertError fs vs 1
 
-instance (Result a, Result b) => FromRow (a,b) where
+instance (FromField a, FromField b) => FromRow (a,b) where
     convertResults [fa,fb] [va,vb] = do
-              !a <- convert fa va
-              !b <- convert fb vb
+              !a <- fromField fa va
+              !b <- fromField fb vb
               return (a,b)
     convertResults fs vs  = convertError fs vs 2
 
-instance (Result a, Result b, Result c) => FromRow (a,b,c) where
+instance (FromField a, FromField b, FromField c) => FromRow (a,b,c) where
     convertResults [fa,fb,fc] [va,vb,vc] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
               return (a,b,c)
     convertResults fs vs  = convertError fs vs 3
 
-instance (Result a, Result b, Result c, Result d) =>
+instance (FromField a, FromField b, FromField c, FromField d) =>
     FromRow (a,b,c,d) where
     convertResults [fa,fb,fc,fd] [va,vb,vc,vd] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
               return (a,b,c,d)
     convertResults fs vs  = convertError fs vs 4
 
-instance (Result a, Result b, Result c, Result d, Result e) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e) =>
     FromRow (a,b,c,d,e) where
     convertResults [fa,fb,fc,fd,fe] [va,vb,vc,vd,ve] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
               return (a,b,c,d,e)
     convertResults fs vs  = convertError fs vs 5
 
-instance (Result a, Result b, Result c, Result d, Result e, Result f) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f) =>
     FromRow (a,b,c,d,e,f) where
     convertResults [fa,fb,fc,fd,fe,ff] [va,vb,vc,vd,ve,vf] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
-              !f <- convert ff vf
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
+              !f <- fromField ff vf
               return (a,b,c,d,e,f)
     convertResults fs vs  = convertError fs vs 6
 
-instance (Result a, Result b, Result c, Result d, Result e, Result f,
-          Result g) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
+          FromField g) =>
     FromRow (a,b,c,d,e,f,g) where
     convertResults [fa,fb,fc,fd,fe,ff,fg] [va,vb,vc,vd,ve,vf,vg] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
-              !f <- convert ff vf
-              !g <- convert fg vg
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
+              !f <- fromField ff vf
+              !g <- fromField fg vg
               return (a,b,c,d,e,f,g)
     convertResults fs vs  = convertError fs vs 7
 
-instance (Result a, Result b, Result c, Result d, Result e, Result f,
-          Result g, Result h) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
+          FromField g, FromField h) =>
     FromRow (a,b,c,d,e,f,g,h) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh] [va,vb,vc,vd,ve,vf,vg,vh] = do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
-              !f <- convert ff vf
-              !g <- convert fg vg
-              !h <- convert fh vh
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
+              !f <- fromField ff vf
+              !g <- fromField fg vg
+              !h <- fromField fh vh
               return (a,b,c,d,e,f,g,h)
     convertResults fs vs  = convertError fs vs 8
 
-instance (Result a, Result b, Result c, Result d, Result e, Result f,
-          Result g, Result h, Result i) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
+          FromField g, FromField h, FromField i) =>
     FromRow (a,b,c,d,e,f,g,h,i) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi] [va,vb,vc,vd,ve,vf,vg,vh,vi] =
            do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
-              !f <- convert ff vf
-              !g <- convert fg vg
-              !h <- convert fh vh
-              !i <- convert fi vi
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
+              !f <- fromField ff vf
+              !g <- fromField fg vg
+              !h <- fromField fh vh
+              !i <- fromField fi vi
               return (a,b,c,d,e,f,g,h,i)
     convertResults fs vs  = convertError fs vs 9
 
-instance (Result a, Result b, Result c, Result d, Result e, Result f,
-          Result g, Result h, Result i, Result j) =>
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
+          FromField g, FromField h, FromField i, FromField j) =>
     FromRow (a,b,c,d,e,f,g,h,i,j) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi,fj]
                    [va,vb,vc,vd,ve,vf,vg,vh,vi,vj] =
            do
-              !a <- convert fa va
-              !b <- convert fb vb
-              !c <- convert fc vc
-              !d <- convert fd vd
-              !e <- convert fe ve
-              !f <- convert ff vf
-              !g <- convert fg vg
-              !h <- convert fh vh
-              !i <- convert fi vi
-              !j <- convert fj vj
+              !a <- fromField fa va
+              !b <- fromField fb vb
+              !c <- fromField fc vc
+              !d <- fromField fd vd
+              !e <- fromField fe ve
+              !f <- fromField ff vf
+              !g <- fromField fg vg
+              !h <- fromField fh vh
+              !i <- fromField fi vi
+              !j <- fromField fj vj
               return (a,b,c,d,e,f,g,h,i,j)
     convertResults fs vs  = convertError fs vs 10
 
 f <$!> (!x) = f <$> x
 infixl 4 <$!>
 
-instance Result a => FromRow [a] where
-    convertResults fs vs = foldr convert' (pure []) (zip fs vs)
-      where convert' (f,v) as = (:) <$!> convert f v <*> as
+instance FromField a => FromRow [a] where
+    convertResults fs vs = foldr fromField' (pure []) (zip fs vs)
+      where fromField' (f,v) as = (:) <$!> fromField f v <*> as
     {-# INLINE convertResults #-}
 
+
+
+
+
+-------------------------------------------------------------------------------
 -- | Throw a 'ConversionFailed' exception, indicating a mismatch
 -- between the number of columns in the 'Field' and row, and the
 -- number in the collection to be converted to.
@@ -254,12 +265,13 @@ convertError :: [Field]
              -- ^ Number of columns expected for conversion.  For
              -- instance, if converting to a 3-tuple, the number to
              -- provide here would be 3.
-             -> Either SomeException a
-convertError fs vs n = Left . SomeException $ ConversionFailed
+             -> Ok a
+convertError fs vs n = Errors . return . SomeException $ ConversionFailed
     (show (length fs) ++ " values: " ++ show (zip (map typename fs)
                                                   (map (fmap ellipsis) vs)))
     (show n ++ " slots in target type")
     "mismatch between number of columns to convert and number in target type"
+
 
 -------------------------------------------------------------------------------
 ellipsis :: ByteString -> ByteString
@@ -297,15 +309,15 @@ type RowParserState = ([FTuple], [FTuple])
 --
 -- instance "FromRow" User where
 --     "rowParser" = do
---           "pass"      -- discard the first column
+--           "skip" 1    -- skip the first column
 --           name      <- "field"
 --           lastname  <- "field"
---           "pass"      -- skip another column
+--           "skip" 1    -- skip another column
 --           age       <- "field"
 --           return $ User name lastname age
 -- @
 newtype RowParser a 
-  = RowParser { unRowParser :: (StateT RowParserState (Either SomeException) a) }
+  = RowParser { unRowParser :: (StateT RowParserState Ok a) }
   deriving (Functor, Applicative, Monad, MonadState RowParserState)
 
 
@@ -322,7 +334,7 @@ instance Exception RowParseError
 -------------------------------------------------------------------------------
 -- | 
 rowParserError :: (Exception e) => e -> RowParser a
-rowParserError = RowParser . lift . Left . SomeException
+rowParserError = RowParser . lift . Errors . return . SomeException
 
 
 -------------------------------------------------------------------------------
@@ -342,12 +354,12 @@ notEnoughCols = do
 
 -------------------------------------------------------------------------------
 -- | Parse the next field in line, consuming it in process
-field :: Result a => RowParser a
+field :: FromField a => RowParser a
 field = do
   st <- get
   case st of
     ((f,v) : rest, cons) -> do
-      res <- RowParser . lift $ convert f v
+      res <- RowParser . lift $ fromField f v
       put (rest, (f,v) : cons)
       return res
     _ -> notEnoughCols 
@@ -355,11 +367,11 @@ field = do
 
 -------------------------------------------------------------------------------
 -- | Parse the next field in line without consuming it
-peekField :: (Result a) => RowParser a
+peekField :: FromField a => RowParser a
 peekField = do
   st <- get
   case st of
-    ((f,v) : _, _) -> RowParser . lift $ convert f v
+    ((f,v) : _, _) -> RowParser . lift $ fromField f v
     _ -> notEnoughCols
 
 
@@ -375,7 +387,7 @@ rewind n = replicateM_ n $ do
 
 
 -------------------------------------------------------------------------------
--- | Discard the next n fields in line
+-- | Consume the next n fields in line without parsing
 skip :: Int -> RowParser ()
 skip n = modify $ \ (xs, ys) -> let xs' = take n xs
                                 in (drop n xs, reverse xs' ++ ys)
@@ -383,5 +395,53 @@ skip n = modify $ \ (xs, ys) -> let xs' = take n xs
 
 -------------------------------------------------------------------------------
 -- | Run a RowParser
-runRowParser :: RowParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
+runRowParser :: RowParser a -> [Field] -> [Maybe ByteString] -> Ok a
 runRowParser p fs vs = evalStateT (unRowParser p) (zip fs vs, [])
+
+
+infixl 3 :.
+
+-------------------------------------------------------------------------------
+-- | A composite type to parse your custom data structures without
+-- having to define dummy newtype wrappers every time.
+--
+--
+-- > instance FromRow MyData where ...
+-- 
+-- > instance FromRow MyData2 where ...
+--
+--
+-- then I can do the following for free:
+--
+-- @
+-- res <- query' c "..."
+-- forM res $ \\(MyData{..} :. MyData2{..}) -> do
+--   ....
+-- @
+data h :. t = h :. t deriving (Eq,Show,Read)
+
+-------------------------------------------------------------------------------
+-- | A zero datatype when extracting just a single field in a
+-- composite data type.
+--
+-- > MyData :. Z
+data Z = Z deriving (Eq,Show,Read)
+
+
+
+-------------------------------------------------------------------------------
+-- | Any composite type that ends in 'Z' is parseable
+instance (FromRow a) => FromRow (a :. Z) where
+    rowParser = (:. Z) <$> rowParser
+
+
+-------------------------------------------------------------------------------
+-- | Composite types get the instance for free
+instance (FromRow a, FromRow b) => FromRow (a :. b) where
+    rowParser = (:.) <$> rowParser <*> rowParser
+      
+
+-------------------------------------------------------------------------------
+-- | Trying to parse into a 'Z' will simply skip a field and return Z
+instance FromRow Z where
+    rowParser = skip 1 *> return Z
