@@ -418,21 +418,21 @@ infixl 3 :.
 -- forM res $ \\(MyData{..} :. MyData2{..}) -> do
 --   ....
 -- @
+--
+-- To parse a single complex type in a composite context, you can use
+-- return type @MyData :. ()@, although just parsing into MyData would
+-- be the sensible thing to do in that case.
 data h :. t = h :. t deriving (Eq,Show,Read)
 
+
 -------------------------------------------------------------------------------
--- | A zero datatype when extracting just a single field in a
--- composite data type.
+-- | A zero datatype for skipping fields on the fly.
 --
--- > MyData :. Z
+-- The following will skip a field, parse MyData and skip a field
+-- before returning:
+-- 
+-- > Z :. MyData :. Z
 data Z = Z deriving (Eq,Show,Read)
-
-
-
--------------------------------------------------------------------------------
--- | Any composite type that ends in 'Z' is parseable
-instance (FromRow a) => FromRow (a :. Z) where
-    rowParser = (:. Z) <$> rowParser
 
 
 -------------------------------------------------------------------------------
@@ -445,3 +445,9 @@ instance (FromRow a, FromRow b) => FromRow (a :. b) where
 -- | Trying to parse into a 'Z' will simply skip a field and return Z
 instance FromRow Z where
     rowParser = skip 1 *> return Z
+
+
+-------------------------------------------------------------------------------
+-- | Simply return () without consuming any fields
+instance FromRow () where
+    rowParser = return ()
