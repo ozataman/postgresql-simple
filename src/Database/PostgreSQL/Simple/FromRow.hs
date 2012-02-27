@@ -1,8 +1,9 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE BangPatterns, OverloadedStrings, DeriveDataTypeable,  ScopedTypeVariables,
+             GeneralizedNewtypeDeriving #-}
 
 ------------------------------------------------------------------------------
 -- |
--- Module:      Database.PostgreSQL.Simple.QueryResults
+-- Module:      Database.PostgreSQL.Simple.FromRow
 -- Copyright:   (c) 2011 MailRank, Inc.
 --              (c) 2011 Leon P Smith
 -- License:     BSD3
@@ -10,21 +11,23 @@
 -- Stability:   experimental
 -- Portability: portable
 --
--- The 'QueryResults' typeclass, for converting a row of results
+-- The 'FromRow' typeclass, for converting a row of results
 -- returned by a SQL query into a more useful Haskell representation.
 --
 -- Predefined instances are provided for tuples containing up to ten
 -- elements.
 ------------------------------------------------------------------------------
 
-module Database.PostgreSQL.Simple.QueryResults
+module Database.PostgreSQL.Simple.FromRow
     (
-      QueryResults(..)
+      FromRow(..)
     , convertError
     -- * Helpers For Parsing Custom Data Types
     , RowParser
     , field
-    , pass
+    , peekField
+    , skip
+    , rewind
     , runRowParser
     , RowParseError(..)
     ) where
@@ -51,7 +54,7 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 -- each value from the row, and the two are passed to 'convert'.
 --
 -- @
--- instance ('Result' a, 'Result' b) => 'QueryResults' (a,b) where
+-- instance ('Result' a, 'Result' b) => 'FromRow' (a,b) where
 --     'convertResults' [fa,fb] [va,vb] = do
 --               !a <- 'convert' fa va
 --               !b <- 'convert' fb vb
@@ -61,7 +64,7 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 --
 -- Notice that this instance evaluates each element to WHNF before
 -- constructing the pair.  This property is important enough that its
--- a rule all 'QueryResult' instances should follow:
+-- a rule all 'FromRow' instances should follow:
 --
 --   * Evaluate every 'Result' value to WHNF before constructing
 --     the result
@@ -81,7 +84,7 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 -- @
 -- data User = User { firstName :: String, lastName :: String }
 --
--- instance 'QueryResults' User where
+-- instance 'FromRow' User where
 --     'convertResults' [fa,qfb] [va,vb] = User \<$\> a \<*\> b
 --        where  !a =  'convert' fa va
 --               !b =  'convert' fb vb
@@ -91,11 +94,11 @@ import qualified Database.PostgreSQL.LibPQ as LibPQ (Result)
 -- In this example,  the bang patterns are not used correctly.  They force
 -- the data constructors of the 'Either' type,  and are not forcing the
 -- 'Result' values we need to force.  This gives the consumer of the
--- 'QueryResult' the ability to cause the memory leak,  which is an
+-- 'FromRow' the ability to cause the memory leak,  which is an
 -- undesirable state of affairs.
 --
 -- Minimum complete definition: 'convertResults' or 'rowParser'
-class QueryResults a where
+class FromRow a where
 
     ---------------------------------------------------------------------------
     -- | 'rowParser' offers a convenient way to parse rows into custom
@@ -113,20 +116,20 @@ class QueryResults a where
     
 
 -------------------------------------------------------------------------------
-instance (Result a) => QueryResults (Only a) where
+instance (Result a) => FromRow (Only a) where
     convertResults [fa] [va] = do
               !a <- convert fa va
               return (Only a)
     convertResults fs vs  = convertError fs vs 1
 
-instance (Result a, Result b) => QueryResults (a,b) where
+instance (Result a, Result b) => FromRow (a,b) where
     convertResults [fa,fb] [va,vb] = do
               !a <- convert fa va
               !b <- convert fb vb
               return (a,b)
     convertResults fs vs  = convertError fs vs 2
 
-instance (Result a, Result b, Result c) => QueryResults (a,b,c) where
+instance (Result a, Result b, Result c) => FromRow (a,b,c) where
     convertResults [fa,fb,fc] [va,vb,vc] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -135,7 +138,7 @@ instance (Result a, Result b, Result c) => QueryResults (a,b,c) where
     convertResults fs vs  = convertError fs vs 3
 
 instance (Result a, Result b, Result c, Result d) =>
-    QueryResults (a,b,c,d) where
+    FromRow (a,b,c,d) where
     convertResults [fa,fb,fc,fd] [va,vb,vc,vd] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -145,7 +148,7 @@ instance (Result a, Result b, Result c, Result d) =>
     convertResults fs vs  = convertError fs vs 4
 
 instance (Result a, Result b, Result c, Result d, Result e) =>
-    QueryResults (a,b,c,d,e) where
+    FromRow (a,b,c,d,e) where
     convertResults [fa,fb,fc,fd,fe] [va,vb,vc,vd,ve] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -156,7 +159,7 @@ instance (Result a, Result b, Result c, Result d, Result e) =>
     convertResults fs vs  = convertError fs vs 5
 
 instance (Result a, Result b, Result c, Result d, Result e, Result f) =>
-    QueryResults (a,b,c,d,e,f) where
+    FromRow (a,b,c,d,e,f) where
     convertResults [fa,fb,fc,fd,fe,ff] [va,vb,vc,vd,ve,vf] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -169,7 +172,7 @@ instance (Result a, Result b, Result c, Result d, Result e, Result f) =>
 
 instance (Result a, Result b, Result c, Result d, Result e, Result f,
           Result g) =>
-    QueryResults (a,b,c,d,e,f,g) where
+    FromRow (a,b,c,d,e,f,g) where
     convertResults [fa,fb,fc,fd,fe,ff,fg] [va,vb,vc,vd,ve,vf,vg] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -183,7 +186,7 @@ instance (Result a, Result b, Result c, Result d, Result e, Result f,
 
 instance (Result a, Result b, Result c, Result d, Result e, Result f,
           Result g, Result h) =>
-    QueryResults (a,b,c,d,e,f,g,h) where
+    FromRow (a,b,c,d,e,f,g,h) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh] [va,vb,vc,vd,ve,vf,vg,vh] = do
               !a <- convert fa va
               !b <- convert fb vb
@@ -198,7 +201,7 @@ instance (Result a, Result b, Result c, Result d, Result e, Result f,
 
 instance (Result a, Result b, Result c, Result d, Result e, Result f,
           Result g, Result h, Result i) =>
-    QueryResults (a,b,c,d,e,f,g,h,i) where
+    FromRow (a,b,c,d,e,f,g,h,i) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi] [va,vb,vc,vd,ve,vf,vg,vh,vi] =
            do
               !a <- convert fa va
@@ -215,7 +218,7 @@ instance (Result a, Result b, Result c, Result d, Result e, Result f,
 
 instance (Result a, Result b, Result c, Result d, Result e, Result f,
           Result g, Result h, Result i, Result j) =>
-    QueryResults (a,b,c,d,e,f,g,h,i,j) where
+    FromRow (a,b,c,d,e,f,g,h,i,j) where
     convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi,fj]
                    [va,vb,vc,vd,ve,vf,vg,vh,vi,vj] =
            do
@@ -235,7 +238,7 @@ instance (Result a, Result b, Result c, Result d, Result e, Result f,
 f <$!> (!x) = f <$> x
 infixl 4 <$!>
 
-instance Result a => QueryResults [a] where
+instance Result a => FromRow [a] where
     convertResults fs vs = foldr convert' (pure []) (zip fs vs)
       where convert' (f,v) as = (:) <$!> convert f v <*> as
     {-# INLINE convertResults #-}
@@ -258,6 +261,7 @@ convertError fs vs n = Left . SomeException $ ConversionFailed
     (show n ++ " slots in target type")
     "mismatch between number of columns to convert and number in target type"
 
+-------------------------------------------------------------------------------
 ellipsis :: ByteString -> ByteString
 ellipsis bs
     | B.length bs > 15 = B.take 10 bs `B.append` "[...]"
@@ -269,7 +273,15 @@ ellipsis bs
                               ------------------
 
 
-type RowParserState = [(Field, Maybe ByteString)]
+-------------------------------------------------------------------------------
+type FTuple = (Field, Maybe ByteString)
+
+
+-------------------------------------------------------------------------------
+-- | Our parse state is a tuple of unconsumed and consumed states.
+-- Note that consumed states are in reverse order for performance
+-- reasons.
+type RowParserState = ([FTuple], [FTuple])
 
 
 -------------------------------------------------------------------------------
@@ -283,7 +295,7 @@ type RowParserState = [(Field, Maybe ByteString)]
 -- @
 -- data User = User name lastname age
 --
--- instance "QueryResults" User where
+-- instance "FromRow" User where
 --     "rowParser" = do
 --           "pass"      -- discard the first column
 --           name      <- "field"
@@ -300,8 +312,8 @@ newtype RowParser a
 -------------------------------------------------------------------------------
 -- | Exceptions that may be raised while trying to parse a row
 data RowParseError 
-    = NotEnoughFields
-    | ParserNotDefined
+    = ParserNotDefined
+    | NoConsumedFields
   deriving (Eq, Show, Typeable)
 
 instance Exception RowParseError
@@ -314,25 +326,62 @@ rowParserError = RowParser . lift . Left . SomeException
 
 
 -------------------------------------------------------------------------------
--- | Parse the next field in line, consuming it in process
-field :: (Result a) => RowParser a
-field = do
+notEnoughCols :: RowParser a
+notEnoughCols = do
+  let disp cons = map conv $ reverse cons
+      conv (f,v) = (typename f, ellipsis `fmap` v)
   st <- get
   case st of
-    ((f,v) : rest) -> do
-      res <- RowParser . lift $ convert f v
-      put rest
-      return res
-    [] -> rowParserError $ NotEnoughFields
+    ([], cons) -> rowParserError $ ConversionFailed
+                     (show (length cons) ++ " values: " ++ show (disp cons))
+                     (show "target haskell type")
+                     ("Not enough columns to parse the target field")
+    _ -> error "notEnoughCols called with unconsumed columns."
+                     
 
 
 -------------------------------------------------------------------------------
--- | Discard the next field in line
-pass :: RowParser ()
-pass = modify $ drop 1
+-- | Parse the next field in line, consuming it in process
+field :: Result a => RowParser a
+field = do
+  st <- get
+  case st of
+    ((f,v) : rest, cons) -> do
+      res <- RowParser . lift $ convert f v
+      put (rest, (f,v) : cons)
+      return res
+    _ -> notEnoughCols 
+
+
+-------------------------------------------------------------------------------
+-- | Parse the next field in line without consuming it
+peekField :: (Result a) => RowParser a
+peekField = do
+  st <- get
+  case st of
+    ((f,v) : _, _) -> RowParser . lift $ convert f v
+    _ -> notEnoughCols
+
+
+-------------------------------------------------------------------------------
+-- | Rewind n consumed fields, raising an exception if there aren't
+-- enough fields that have been consumed.
+rewind :: Int -> RowParser ()
+rewind n = replicateM_ n $ do
+  st <- get
+  case st of
+    (xs, (y:ys)) -> put (y:xs, ys)
+    _ -> rowParserError NoConsumedFields
+
+
+-------------------------------------------------------------------------------
+-- | Discard the next n fields in line
+skip :: Int -> RowParser ()
+skip n = modify $ \ (xs, ys) -> let xs' = take n xs
+                                in (drop n xs, reverse xs' ++ ys)
 
 
 -------------------------------------------------------------------------------
 -- | Run a RowParser
 runRowParser :: RowParser a -> [Field] -> [Maybe ByteString] -> Either SomeException a
-runRowParser p fs vs = evalStateT (unRowParser p) (zip fs vs)
+runRowParser p fs vs = evalStateT (unRowParser p) (zip fs vs, [])

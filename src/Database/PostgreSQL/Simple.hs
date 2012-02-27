@@ -122,7 +122,7 @@ import Database.PostgreSQL.Simple.BuiltinTypes (oid2builtin, builtin2typname)
 import Database.PostgreSQL.Simple.Param (Action(..), inQuotes)
 import Database.PostgreSQL.Simple.QueryParams (QueryParams(..))
 import Database.PostgreSQL.Simple.Result (ResultError(..))
-import Database.PostgreSQL.Simple.QueryResults (QueryResults(..))
+import Database.PostgreSQL.Simple.FromRow (FromRow(..))
 import Database.PostgreSQL.Simple.Types (Binary(..), In(..), Only(..), Query(..))
 import Database.PostgreSQL.Simple.Internal as Base
 import qualified Database.PostgreSQL.LibPQ as PQ
@@ -293,14 +293,14 @@ finishExecute conn q result = do
 --   using 'execute' instead of 'query').
 --
 -- * 'ResultError': result conversion failed.
-query :: (QueryParams q, QueryResults r)
+query :: (QueryParams q, FromRow r)
          => Connection -> Query -> q -> IO [r]
 query conn template qs = do
   result <- exec conn =<< formatQuery conn template qs
   finishQuery conn template result
 
 -- | A version of 'query' that does not perform query substitution.
-query_ :: (QueryResults r) => Connection -> Query -> IO [r]
+query_ :: (FromRow r) => Connection -> Query -> IO [r]
 query_ conn q@(Query que) = do
   result <- exec conn que
   finishQuery conn q result
@@ -324,7 +324,7 @@ query_ conn q@(Query que) = do
 --
 -- * 'ResultError': result conversion failed.
 
-fold            :: ( QueryResults row, QueryParams params )
+fold            :: ( FromRow row, QueryParams params )
                 => Connection
                 -> Query
                 -> params
@@ -348,7 +348,7 @@ defaultFoldOptions = FoldOptions {
       transactionMode = TransactionMode ReadCommitted ReadOnly
     }
 
-foldWithOptions :: ( QueryResults row, QueryParams params )
+foldWithOptions :: ( FromRow row, QueryParams params )
                 => FoldOptions
                 -> Connection
                 -> Query
@@ -361,7 +361,7 @@ foldWithOptions opts conn template qs a f = do
     doFold opts conn template (Query q) a f
 
 -- | A version of 'fold' that does not perform query substitution.
-fold_ :: (QueryResults r) =>
+fold_ :: (FromRow r) =>
          Connection
       -> Query                  -- ^ Query.
       -> a                      -- ^ Initial state for result consumer.
@@ -370,7 +370,7 @@ fold_ :: (QueryResults r) =>
 fold_ = foldWithOptions_ defaultFoldOptions
 
 
-foldWithOptions_ :: (QueryResults r) =>
+foldWithOptions_ :: (FromRow r) =>
                     FoldOptions
                  -> Connection
                  -> Query             -- ^ Query.
@@ -380,7 +380,7 @@ foldWithOptions_ :: (QueryResults r) =>
 foldWithOptions_ opts conn query a f = doFold opts conn query query a f
 
 
-doFold :: ( QueryResults row )
+doFold :: ( FromRow row )
        => FoldOptions
        -> Connection
        -> Query
@@ -426,7 +426,7 @@ doFold FoldOptions{..} conn _template q a f = do
       if null rs then return a else foldM f a rs >>= loop
 
 -- | A version of 'fold' that does not transform a state value.
-forEach :: (QueryParams q, QueryResults r) =>
+forEach :: (QueryParams q, FromRow r) =>
            Connection
         -> Query                -- ^ Query template.
         -> q                    -- ^ Query parameters.
@@ -436,7 +436,7 @@ forEach conn template qs = fold conn template qs () . const
 {-# INLINE forEach #-}
 
 -- | A version of 'forEach' that does not perform query substitution.
-forEach_ :: (QueryResults r) =>
+forEach_ :: (FromRow r) =>
             Connection
          -> Query                -- ^ Query template.
          -> (r -> IO ())         -- ^ Result consumer.
@@ -453,7 +453,7 @@ forM' lo hi m = loop hi []
            a <- m n
            loop (n-1) (a:as)
 
-finishQuery :: (QueryResults r) => Connection -> Query -> PQ.Result -> IO [r]
+finishQuery :: (FromRow r) => Connection -> Query -> PQ.Result -> IO [r]
 finishQuery conn q result = do
   status <- PQ.resultStatus result
   case status of
@@ -759,7 +759,7 @@ fmtError msg q xs = throw FormatError {
 -- $result
 --
 -- The 'query' and 'query_' functions return a list of values in the
--- 'QueryResults' typeclass. This class performs automatic extraction
+-- 'FromRow' typeclass. This class performs automatic extraction
 -- and type conversion of rows from a query result.
 --
 -- Here is a simple example of how to extract results:

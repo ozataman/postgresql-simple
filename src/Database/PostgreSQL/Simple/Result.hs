@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternGuards, ScopedTypeVariables, OverloadedStrings #-}
 ------------------------------------------------------------------------------
 -- |
--- Module:      Database.PostgreSQL.Simple.QueryResults
+-- Module:      Database.PostgreSQL.Simple.Result
 -- Copyright:   (c) 2011 MailRank, Inc.
 --              (c) 2011 Leon P Smith
 -- License:     BSD3
