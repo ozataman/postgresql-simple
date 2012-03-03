@@ -22,55 +22,45 @@ import Database.PostgreSQL.Simple.Result
 
 
 -------------------------------------------------------------------------------
--- | Try to collect the first level type names from the type
--- constructor given.
-collectTypeNames (ConT nm) = [nm]
-collectTypeNames (VarT nm) = [nm]
-collectTypeNames (ForallT tvars _ ty) = collectTypeNames ty
-
--- Don't collect nested type constructors beyond the first level. It
--- screws stuff up later.
-collectTypeNames (AppT (ConT nm1) (AppT (ConT nm2) (ConT _))) = [nm1,nm2]
-collectTypeNames (AppT (AppT (ConT nm1) (ConT _)) (ConT nm2)) = [nm1,nm2]
-collectTypeNames (AppT x y) = collectTypeNames x ++ collectTypeNames y
-collectTypeNames _ = []
-
-
--------------------------------------------------------------------------------
--- | Only work with data and newtype declarations
-withType name f = do
-  typ <- reify name
-  case typ of
-    TyConI dec -> 
-      case dec of
-        DataD _ _ tvars cons _ -> f tvars cons
-        NewtypeD _ _ tvars con _ -> f tvars [con]
-        TySynD _ tvars ty -> 
-          case ty of
-            ConT nm -> withType nm f
-            AppT (ConT nm) _ -> withType nm f
-            _ -> error "Can't process this type synonym"
-
-
--------------------------------------------------------------------------------
--- | Get the instances of a given Typeclass. Before returning, flatten
--- all the deeper AppT applications so that we can do a crude matching
--- of instance membership based on the constructor. We do this because
--- 'isClassInstance' craps out with complex types.
-reifyInstances nm = do
-  i <- reify nm
-  case i of
-    ClassI _ is -> return $ concatMap flattenCons $ concatMap ci_tys is
-    _ -> error "reifyInstances should only be called on a class name"
-
-
--------------------------------------------------------------------------------
-flattenCons (AppT c1 c2) = flattenCons c1 ++ flattenCons c2
-flattenCons c = [c]
-
-
--------------------------------------------------------------------------------
--- | Intelligently derive a FromRow instance for the given Type
+-- | Intelligently derive a FromRow instance for the given type. We
+-- pass the type with the slighly more complex than usual QQ syntax to
+-- enable more flexible use. See below for some examples (even
+-- somewhat complex cases):
+--
+-- @
+-- data Key e = Key { unKey :: Int }
+--   deriving (Eq,Show,Read,Ord)
+--
+-- data Entity e = E {
+--       eKey :: Key e
+--     , eRec :: e
+--     } deriving (Eq,Show,Read,Ord)
+--
+-- instance FromField (Key e) where
+--     fromField f v = Key `fmap` fromField f v
+--
+-- instance (FromRow k) => FromRow (Entity k) where
+--     rowParser = E <$> field <*> rowParser
+--
+-- data Car = Car {
+--       carName :: Text
+--     , carModel :: Text
+--     }
+-- 
+-- data PersonG c d = Person {
+--       personCar :: c
+--     , personWhatever :: d
+--     , personCarPointer :: Key Car
+--     , personName :: Text
+--     , personCar2 :: Entity Car
+--     }
+--
+-- $(deriveFromRow [t| Car |])
+-- $(deriveFromRow [t| forall b. PersonG (Entity Car) b |])
+-- $(deriveFromRow [t| forall b. PersonG Car b |])
+-- $(deriveFromRow [t| forall a b. PersonG a b |])
+-- $(deriveFromRow [t| forall a b. PersonG a (Entity (PersonG Int b)) |])
+-- @
 deriveFromRow :: TypeQ -> Q [Dec]
 deriveFromRow ty = do
   ty' <- ty
@@ -143,6 +133,54 @@ deriveFromRow ty = do
         (conT ''FromRow `appT` insType)
         ([return $ FunD (mkName "rowParser") [Clause [] (NormalB bodyExp) []]])
 
+
+
+-------------------------------------------------------------------------------
+-- | Try to collect the first level type names from the type
+-- constructor given.
+collectTypeNames (ConT nm) = [nm]
+collectTypeNames (VarT nm) = [nm]
+collectTypeNames (ForallT tvars _ ty) = collectTypeNames ty
+
+-- Don't collect nested type constructors beyond the first level. It
+-- screws stuff up later.
+collectTypeNames (AppT (ConT nm1) (AppT (ConT nm2) (ConT _))) = [nm1,nm2]
+collectTypeNames (AppT (AppT (ConT nm1) (ConT _)) (ConT nm2)) = [nm1,nm2]
+collectTypeNames (AppT x y) = collectTypeNames x ++ collectTypeNames y
+collectTypeNames _ = []
+
+
+-------------------------------------------------------------------------------
+-- | Only work with data and newtype declarations
+withType name f = do
+  typ <- reify name
+  case typ of
+    TyConI dec -> 
+      case dec of
+        DataD _ _ tvars cons _ -> f tvars cons
+        NewtypeD _ _ tvars con _ -> f tvars [con]
+        TySynD _ tvars ty -> 
+          case ty of
+            ConT nm -> withType nm f
+            AppT (ConT nm) _ -> withType nm f
+            _ -> error "Can't process this type synonym"
+
+
+-------------------------------------------------------------------------------
+-- | Get the instances of a given Typeclass. Before returning, flatten
+-- all the deeper AppT applications so that we can do a crude matching
+-- of instance membership based on the constructor. We do this because
+-- 'isClassInstance' craps out with complex types.
+reifyInstances nm = do
+  i <- reify nm
+  case i of
+    ClassI _ is -> return $ concatMap flattenCons $ concatMap ci_tys is
+    _ -> error "reifyInstances should only be called on a class name"
+
+
+-------------------------------------------------------------------------------
+flattenCons (AppT c1 c2) = flattenCons c1 ++ flattenCons c2
+flattenCons c = [c]
 
 
 -------------------------------------------------------------------------------
