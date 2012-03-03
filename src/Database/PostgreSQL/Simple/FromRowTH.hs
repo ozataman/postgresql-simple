@@ -22,10 +22,14 @@ import Database.PostgreSQL.Simple.Result
 
 
 -------------------------------------------------------------------------------
--- | Intelligently derive a FromRow instance for the given type. We
--- pass the type with the slighly more complex than usual QQ syntax to
--- enable more flexible use. See below for some examples (even
--- somewhat complex cases):
+-- | Intelligently derive a FromRow instance for the given type. For
+-- each field in the given data type, we try to infer, albeit crudely,
+-- whether the field is an instance of 'FromField' or 'FromRow'. If we
+-- can't figure it out, we default to 'FromField'. This will hopefully
+-- cover over 90% of (even complex) cases.
+--
+-- We pass the desired type with the slighly more complex than usual
+-- QQ syntax to enable more flexible use. See below for some examples.
 --
 -- @
 -- data Key e = Key { unKey :: Int }
