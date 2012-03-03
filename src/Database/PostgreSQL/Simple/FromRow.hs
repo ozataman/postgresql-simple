@@ -21,7 +21,6 @@
 
 module Database.PostgreSQL.Simple.FromRow
     ( FromRow(..)
-    , convertError
     -- * Helpers For Parsing Custom Data Types
     , RowParser
     , field
@@ -123,123 +122,53 @@ class FromRow a where
 
 -------------------------------------------------------------------------------
 instance (FromField a) => FromRow (Only a) where
-    convertResults [fa] [va] = do
-              !a <- fromField fa va
-              return (Only a)
-    convertResults fs vs  = convertError fs vs 1
+    rowParser = Only <$> field
 
 instance (FromField a, FromField b) => FromRow (a,b) where
-    convertResults [fa,fb] [va,vb] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              return (a,b)
-    convertResults fs vs  = convertError fs vs 2
+    rowParser = (,) <$> field <*> field
 
 instance (FromField a, FromField b, FromField c) => FromRow (a,b,c) where
-    convertResults [fa,fb,fc] [va,vb,vc] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              return (a,b,c)
-    convertResults fs vs  = convertError fs vs 3
+    rowParser = (,,) <$> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d) =>
     FromRow (a,b,c,d) where
-    convertResults [fa,fb,fc,fd] [va,vb,vc,vd] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              return (a,b,c,d)
-    convertResults fs vs  = convertError fs vs 4
+    rowParser = (,,,) <$> field <*> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e) =>
     FromRow (a,b,c,d,e) where
-    convertResults [fa,fb,fc,fd,fe] [va,vb,vc,vd,ve] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              return (a,b,c,d,e)
-    convertResults fs vs  = convertError fs vs 5
+    rowParser = (,,,,) <$> field <*> field <*> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f) =>
     FromRow (a,b,c,d,e,f) where
-    convertResults [fa,fb,fc,fd,fe,ff] [va,vb,vc,vd,ve,vf] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              !f <- fromField ff vf
-              return (a,b,c,d,e,f)
-    convertResults fs vs  = convertError fs vs 6
+    rowParser = (,,,,,) <$> field <*> field <*> field <*> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
           FromField g) =>
     FromRow (a,b,c,d,e,f,g) where
-    convertResults [fa,fb,fc,fd,fe,ff,fg] [va,vb,vc,vd,ve,vf,vg] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              !f <- fromField ff vf
-              !g <- fromField fg vg
-              return (a,b,c,d,e,f,g)
-    convertResults fs vs  = convertError fs vs 7
+    rowParser = (,,,,,,) 
+      <$> field <*> field <*> field <*> field <*> field 
+      <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
           FromField g, FromField h) =>
     FromRow (a,b,c,d,e,f,g,h) where
-    convertResults [fa,fb,fc,fd,fe,ff,fg,fh] [va,vb,vc,vd,ve,vf,vg,vh] = do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              !f <- fromField ff vf
-              !g <- fromField fg vg
-              !h <- fromField fh vh
-              return (a,b,c,d,e,f,g,h)
-    convertResults fs vs  = convertError fs vs 8
+    rowParser = (,,,,,,,) 
+      <$> field <*> field <*> field <*> field <*> field 
+      <*> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
           FromField g, FromField h, FromField i) =>
     FromRow (a,b,c,d,e,f,g,h,i) where
-    convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi] [va,vb,vc,vd,ve,vf,vg,vh,vi] =
-           do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              !f <- fromField ff vf
-              !g <- fromField fg vg
-              !h <- fromField fh vh
-              !i <- fromField fi vi
-              return (a,b,c,d,e,f,g,h,i)
-    convertResults fs vs  = convertError fs vs 9
+    rowParser = (,,,,,,,,) 
+      <$> field <*> field <*> field <*> field <*> field 
+      <*> field <*> field <*> field <*> field
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f,
           FromField g, FromField h, FromField i, FromField j) =>
     FromRow (a,b,c,d,e,f,g,h,i,j) where
-    convertResults [fa,fb,fc,fd,fe,ff,fg,fh,fi,fj]
-                   [va,vb,vc,vd,ve,vf,vg,vh,vi,vj] =
-           do
-              !a <- fromField fa va
-              !b <- fromField fb vb
-              !c <- fromField fc vc
-              !d <- fromField fd vd
-              !e <- fromField fe ve
-              !f <- fromField ff vf
-              !g <- fromField fg vg
-              !h <- fromField fh vh
-              !i <- fromField fi vi
-              !j <- fromField fj vj
-              return (a,b,c,d,e,f,g,h,i,j)
-    convertResults fs vs  = convertError fs vs 10
+    rowParser = (,,,,,,,,,) 
+      <$> field <*> field <*> field <*> field <*> field 
+      <*> field <*> field <*> field <*> field <*> field
 
 f <$!> (!x) = f <$> x
 infixl 4 <$!>
@@ -248,29 +177,6 @@ instance FromField a => FromRow [a] where
     convertResults fs vs = foldr fromField' (pure []) (zip fs vs)
       where fromField' (f,v) as = (:) <$!> fromField f v <*> as
     {-# INLINE convertResults #-}
-
-
-
-
-
--------------------------------------------------------------------------------
--- | Throw a 'ConversionFailed' exception, indicating a mismatch
--- between the number of columns in the 'Field' and row, and the
--- number in the collection to be converted to.
-convertError :: [Field]
-             -- ^ Descriptors of fields to be converted.
-             -> [Maybe ByteString]
-             -- ^ Contents of the row to be converted.
-             -> Int
-             -- ^ Number of columns expected for conversion.  For
-             -- instance, if converting to a 3-tuple, the number to
-             -- provide here would be 3.
-             -> Ok a
-convertError fs vs n = Errors . return . SomeException $ ConversionFailed
-    (show (length fs) ++ " values: " ++ show (zip (map typename fs)
-                                                  (map (fmap ellipsis) vs)))
-    (show n ++ " slots in target type")
-    "mismatch between number of columns to convert and number in target type"
 
 
 -------------------------------------------------------------------------------
