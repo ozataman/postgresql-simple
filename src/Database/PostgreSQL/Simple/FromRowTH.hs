@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DoAndIfThenElse #-}
 
 module Database.PostgreSQL.Simple.FromRowTH 
     ( deriveFromRow
@@ -44,16 +45,28 @@ withType name f = do
       case dec of
         DataD _ _ tvars cons _ -> f tvars cons
         NewtypeD _ _ tvars con _ -> f tvars [con]
-        TySynD _ tvars ty -> error "Can't derive type synonyms yet"
+        TySynD _ tvars ty -> 
+          case ty of
+            ConT nm -> withType nm f
+            AppT (ConT nm) _ -> withType nm f
+            _ -> error "Can't process this type synonym"
 
 
 -------------------------------------------------------------------------------
--- | Get the instances of a given Typeclass
+-- | Get the instances of a given Typeclass. Before returning, flatten
+-- all the deeper AppT applications so that we can do a crude matching
+-- of instance membership based on the constructor. We do this because
+-- 'isClassInstance' craps out with complex types.
 reifyInstances nm = do
   i <- reify nm
   case i of
-    ClassI _ is -> return $ concatMap ci_tys is
+    ClassI _ is -> return $ concatMap flattenCons $ concatMap ci_tys is
     _ -> error "reifyInstances should only be called on a class name"
+
+
+-------------------------------------------------------------------------------
+flattenCons (AppT c1 c2) = flattenCons c1 ++ flattenCons c2
+flattenCons c = [c]
 
 
 -------------------------------------------------------------------------------
@@ -61,7 +74,7 @@ reifyInstances nm = do
 deriveFromRow :: TypeQ -> Q [Dec]
 deriveFromRow ty = do
   ty' <- ty
-  runIO $ print ty'
+  -- runIO $ print ty'
   let names@(name:_) = collectTypeNames ty'
   withType name $ \ tvars cons -> (: []) `fmap` fromCons ty' names tvars cons
   where
@@ -70,25 +83,41 @@ deriveFromRow ty = do
       -- Get instances for FromRow and FromField
       rows <- reifyInstances $ mkName "FromRow"
       fields <- reifyInstances $ mkName "FromField"
+      -- runIO $ print fields
       -- superclass generator
       let classMk t = case isVarName t of
                        True -> Just $ ClassP (mkName "FromField") [VarT t]
                        False -> Nothing
           -- decide whether to use field or rowParser for this field
-          func t = if elem t rows then [|rowParser|] 
-                   else if elem t fields then [|field|]
-                   else if fieldIsTypeParam (head $ collectTypeNames t) then [|field|]
+          func t = if elem t' rows then [|rowParser|] 
+                   else if elem t' fields then [|field|]
+                   else if fieldIsTypeParam t then [|field|]
                    else [|rowParser|]
+              where t' = head $ flattenCons t
+                   
+          -- this would be the elegant way to figure out if current
+          -- record field's types belong to FromField or FromRow
+          -- typeclasses. Unfortunately, GHC panics when using this.
+          -- 
+          -- func t = do
+          --   isRow <- isClassInstance (mkName "FromRow") [t]
+          --   isField <- isClassInstance (mkName "FromField") [t]
+          --   runIO $ print (isRow, isField)
+          --   if isRow then [|rowParser|]
+          --     else if isField then [|field|]
+          --     else if fieldIsTypeParam t then [|field|]
+          --     else [|rowParser|]
+
           -- lookup from data types defined type vars to the type
           -- constructor fields passed in at splie time
           paramIndex = zip (map tvbName tvars) consFields
           
-          -- if it's a type variable, then we use field, if it's an
-          -- unknown concrete type, then we assume it has a FromRow
+          -- if it's a type variable, then we use 'field', if it's an
+          -- unknown concrete type, then we assume it has a 'FromRow'
           -- instance
-          fieldIsTypeParam x = case lookup x paramIndex of
+          fieldIsTypeParam t = case lookup (head $ collectTypeNames t) paramIndex of
                                Just x' -> isVarName x'
-                               Nothing -> True
+                               Nothing -> isVarType t
           -- construct the (MyData a b c d) part in instance declaration
           classNameRoot = conT consName
           classNameStep acc var = acc `appT` (if isVarName var then varT var else conT var)
