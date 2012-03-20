@@ -75,8 +75,8 @@ deriveFromRow ty = do
     appParse a f = [| $(a) <*> $(f)  |]
     fromCons ty' (consName : consFields) tvars cons = do
       -- Get instances for FromRow and FromField
-      rows <- reifyInstances $ mkName "FromRow"
-      fields <- reifyInstances $ mkName "FromField"
+      rows <- reifyMyInstances $ mkName "FromRow"
+      fields <- reifyMyInstances $ mkName "FromField"
       -- runIO $ print fields
       -- superclass generator
       let classMk t = case isVarName t of
@@ -175,7 +175,7 @@ withType name f = do
 -- all the deeper AppT applications so that we can do a crude matching
 -- of instance membership based on the constructor. We do this because
 -- 'isClassInstance' craps out with complex types.
-reifyInstances nm = do
+reifyMyInstances nm = do
   i <- reify nm
   case i of
     ClassI _ is -> return $ concatMap flattenCons $ concatMap ci_tys is
