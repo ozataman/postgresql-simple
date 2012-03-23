@@ -68,39 +68,44 @@ import Database.PostgreSQL.Simple.Result
 deriveFromRow :: TypeQ -> Q [Dec]
 deriveFromRow ty = do
   ty' <- ty
-  -- runIO $ print ty'
   let names@(name:_) = collectTypeNames ty'
   withType name $ \ tvars cons -> (: []) `fmap` fromCons ty' names tvars cons
   where
     appParse a f = [| $(a) <*> $(f)  |]
     fromCons ty' (consName : consFields) tvars cons = do
       -- Get instances for FromRow and FromField
-      rows <- reifyMyInstances $ mkName "FromRow"
-      fields <- reifyMyInstances $ mkName "FromField"
-      -- runIO $ print fields
+      -- rows <- reifyInstances $ mkName "FromRow"
+      -- fields <- reifyInstances $ mkName "FromField"
       -- superclass generator
       let classMk t = case isVarName t of
                        True -> Just $ ClassP (mkName "FromField") [VarT t]
                        False -> Nothing
           -- decide whether to use field or rowParser for this field
-          func t = if elem t' rows then [|rowParser|] 
-                   else if elem t' fields then [|field|]
-                   else if fieldIsTypeParam t then [|field|]
-                   else [|rowParser|]
-              where t' = head $ flattenCons t
+          -- func t = if elem t' rows then [|rowParser|] 
+          --          else if elem t' fields then [|field|]
+          --          else if fieldIsTypeParam t then [|field|]
+          --          else [|rowParser|]
+          --     where t' = head $ flattenCons t
                    
           -- this would be the elegant way to figure out if current
           -- record field's types belong to FromField or FromRow
           -- typeclasses. Unfortunately, GHC panics when using this.
           -- 
-          -- func t = do
-          --   isRow <- isClassInstance (mkName "FromRow") [t]
-          --   isField <- isClassInstance (mkName "FromField") [t]
-          --   runIO $ print (isRow, isField)
-          --   if isRow then [|rowParser|]
-          --     else if isField then [|field|]
-          --     else if fieldIsTypeParam t then [|field|]
-          --     else [|rowParser|]
+          func t = 
+            case t of
+              VarT{} -> 
+                case fieldIsTypeParam t of
+                  False -> [|rowParser|] 
+                  True -> [|field|]
+              _ -> do
+                isRow <- isInstance (mkName "FromRow") [t]
+                isField <- isInstance (mkName "FromField") [t]
+                dbg $ "RowValue: " ++ show isRow
+                dbg $ "FieldValue: " ++ show isField
+                if isRow then [|rowParser|]
+                  else if isField then [|field|]
+                  else if fieldIsTypeParam t then [|field|]
+                  else [|rowParser|]
 
           -- lookup from data types defined type vars to the type
           -- constructor fields passed in at splie time
@@ -123,21 +128,24 @@ deriveFromRow ty = do
       bodyExp <- case cons of
         [] -> error "deriveFromRow can only process regular data declarations"
         (NormalC cname vars) : _ -> 
-          let step acc (_,ty) = do appParse acc (func ty)
-          in foldl step ([| return $(conE cname) |]) vars
+          let step acc ty = appParse acc (func ty)
+          in foldl step ([| return $(conE cname) |]) $ map snd vars
         (RecC cname vars) : _ -> 
-          let step acc (_,_,ty) = do
-                             -- runIO $ print ty
-                             -- runIO $ print consFields
-                             -- runIO . print  =<< func ty
-                             appParse acc (func ty)
-          in foldl step ([| return $(conE cname) |]) vars
+          let step acc x = do
+                             dbg $ "Current record type " ++ show x
+                             dec <- func x
+                             dbg $ "Decision is " ++ show dec
+                             appParse acc (func x)
+          in foldl step ([| return $(conE cname) |]) $ 
+             map (\ (_,_,x) -> x) vars
       instanceD
         (return $ catMaybes $ map classMk consFields)
         (conT ''FromRow `appT` insType)
         ([return $ FunD (mkName "rowParser") [Clause [] (NormalB bodyExp) []]])
 
 
+-- dbg = runIO . putStrLn
+dbg _ = return ()
 
 -------------------------------------------------------------------------------
 -- | Try to collect the first level type names from the type
@@ -169,17 +177,6 @@ withType name f = do
             AppT (ConT nm) _ -> withType nm f
             _ -> error "Can't process this type synonym"
 
-
--------------------------------------------------------------------------------
--- | Get the instances of a given Typeclass. Before returning, flatten
--- all the deeper AppT applications so that we can do a crude matching
--- of instance membership based on the constructor. We do this because
--- 'isClassInstance' craps out with complex types.
-reifyMyInstances nm = do
-  i <- reify nm
-  case i of
-    ClassI _ is -> return $ concatMap flattenCons $ concatMap ci_tys is
-    _ -> error "reifyInstances should only be called on a class name"
 
 
 -------------------------------------------------------------------------------
