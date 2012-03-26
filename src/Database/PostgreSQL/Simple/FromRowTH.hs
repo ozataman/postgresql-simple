@@ -8,7 +8,9 @@ module Database.PostgreSQL.Simple.FromRowTH
 
 -------------------------------------------------------------------------------
 import Control.Applicative
+import Control.Arrow
 import Data.Char                            (isLower)
+import Data.Generics
 import Data.Maybe
 import Language.Haskell.TH
 -------------------------------------------------------------------------------
@@ -69,7 +71,7 @@ deriveFromRow :: TypeQ -> Q [Dec]
 deriveFromRow ty = do
   ty' <- ty
   let names@(name:_) = collectTypeNames ty'
-  withType name $ \ tvars cons -> (: []) `fmap` fromCons ty' names tvars cons
+  withType name ty' $ \ tvars cons -> (: []) `fmap` fromCons ty' names tvars cons
   where
     appParse a f = [| $(a) <*> $(f)  |]
     fromCons ty' (consName : consFields) tvars cons = do
@@ -92,20 +94,18 @@ deriveFromRow ty = do
           -- typeclasses. Unfortunately, GHC panics when using this.
           -- 
           func t = 
-            case t of
-              VarT{} -> 
-                case fieldIsTypeParam t of
-                  False -> [|rowParser|] 
-                  True -> [|field|]
-              _ -> do
-                isRow <- isInstance (mkName "FromRow") [t]
-                isField <- isInstance (mkName "FromField") [t]
-                dbg $ "RowValue: " ++ show isRow
-                dbg $ "FieldValue: " ++ show isField
-                if isRow then [|rowParser|]
-                  else if isField then [|field|]
-                  else if fieldIsTypeParam t then [|field|]
-                  else [|rowParser|]
+            if isVarT t then [|field|]
+              else if hasVarT t then [|field|]
+              else do
+                    let t' = replaceVarT (ConT (mkName "Int")) t
+                    isRow <- isInstance (mkName "FromRow") [t']
+                    isField <- isInstance (mkName "FromField") [t']
+                    dbg $ "RowValue: " ++ show isRow
+                    dbg $ "FieldValue: " ++ show isField
+                    if isRow then [|rowParser|]
+                      else if isField then [|field|]
+                      else if fieldIsTypeParam t then [|field|]
+                      else [|rowParser|]
 
           -- lookup from data types defined type vars to the type
           -- constructor fields passed in at splie time
@@ -125,19 +125,17 @@ deriveFromRow ty = do
             case ty' of
               ForallT _ _ x -> return x
               x -> return x
+          decideStep acc x = do
+            dbg $ "Current record type " ++ show x
+            dec <- func x
+            dbg $ "Decision is " ++ show dec
+            appParse acc (func x)
       bodyExp <- case cons of
         [] -> error "deriveFromRow can only process regular data declarations"
         (NormalC cname vars) : _ -> 
-          let step acc ty = appParse acc (func ty)
-          in foldl step ([| return $(conE cname) |]) $ map snd vars
+          foldl decideStep ([| return $(conE cname) |]) $ map snd vars
         (RecC cname vars) : _ -> 
-          let step acc x = do
-                             dbg $ "Current record type " ++ show x
-                             dec <- func x
-                             dbg $ "Decision is " ++ show dec
-                             appParse acc (func x)
-          in foldl step ([| return $(conE cname) |]) $ 
-             map (\ (_,_,x) -> x) vars
+          foldl decideStep ([| return $(conE cname) |]) $ map (\ (_,_,x) -> x) vars
       instanceD
         (return $ catMaybes $ map classMk consFields)
         (conT ''FromRow `appT` insType)
@@ -146,6 +144,27 @@ deriveFromRow ty = do
 
 -- dbg = runIO . putStrLn
 dbg _ = return ()
+
+
+-------------------------------------------------------------------------------
+isVarT VarT{} = True
+isVarT _ = False
+
+-------------------------------------------------------------------------------
+hasVarT VarT{} = True
+hasVarT (ForallT _ _ typ) = hasVarT typ
+hasVarT (AppT t1 t2) = hasVarT t1 || hasVarT t2
+hasVarT (SigT t1 _) = hasVarT t1
+hasVarT _ = False
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+replaceVarT a = everywhere $ mkT f
+    where 
+      f VarT{} = a
+      f x = x
+
 
 -------------------------------------------------------------------------------
 -- | Try to collect the first level type names from the type
@@ -164,19 +183,61 @@ collectTypeNames _ = []
 
 -------------------------------------------------------------------------------
 -- | Only work with data and newtype declarations
-withType name f = do
+withType name givenType f  = do
   typ <- reify name
   case typ of
     TyConI dec -> 
       case dec of
-        DataD _ _ tvars cons _ -> f tvars cons
+        DataD _ _ tvars cons _ -> 
+          let varMap = mapTypeVars givenType tvars
+              cons' = map (applyTVars varMap) cons
+          in f tvars cons'
         NewtypeD _ _ tvars con _ -> f tvars [con]
-        TySynD _ tvars ty -> 
-          case ty of
-            ConT nm -> withType nm f
-            AppT (ConT nm) _ -> withType nm f
+        TySynD _ tvars t -> 
+          case t of
+            ConT nm -> withType nm givenType f
+            AppT (ConT nm) _ -> withType nm givenType f
             _ -> error "Can't process this type synonym"
 
+
+-------------------------------------------------------------------------------
+-- | Apply the constructor type variables based on given Name -> Type map
+applyTVars m con = 
+  case con of
+    NormalC nm xs -> NormalC nm $ map (second mapType) xs
+    RecC nm xs -> RecC nm $ map (\ (x, y, t) -> (x,y, mapType t)) xs
+    where 
+      mapType def@(VarT nm) = maybe def id $ lookup nm m
+      mapType x = x
+
+
+-------------------------------------------------------------------------------
+-- | Extract names of type variables 
+typeVarNames :: [TyVarBndr] -> [Name]
+typeVarNames tvars = map f tvars
+    where 
+      f (PlainTV nm) = nm
+      f (KindedTV nm _) = nm
+
+
+-------------------------------------------------------------------------------
+-- | Extract the list of types present in a type signaturex.
+--
+-- Be recursive only in the left leaf - recursing into right leaf
+-- would be too much to only capture the list of type variables that
+-- were specialized for this type signature.
+typeList (AppT ty1 ty2) = typeList ty1 ++ [ty2]
+typeList (SigT ty _) = typeList ty
+typeList (ForallT _ _ ty) = typeList ty
+typeList x = [x]
+
+
+-------------------------------------------------------------------------------
+mapTypeVars :: Type -> [TyVarBndr] -> [(Name, Type)]
+mapTypeVars ty tvars = zip nms tys
+    where 
+      tys = drop 1 $ typeList ty
+      nms = typeVarNames tvars
 
 
 -------------------------------------------------------------------------------
